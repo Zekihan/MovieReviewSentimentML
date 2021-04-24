@@ -1,283 +1,333 @@
-import numpy as np  # import numpy library
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+import re
 
-from test2 import get_file_data, generate_dictinoary_data, generate_training_label, \
-    shuffle_arrays
-
-
-def initialize_parameters(n_in, n_out, ini_type='plain'):
-    """
-    Helper function to initialize some form of random weights and Zero biases
-    Args:
-        n_in: size of input layer
-        n_out: size of output/number of neurons
-        ini_type: set initialization type for weights
-    Returns:
-        params: a dictionary containing W and b
-    """
-
-    params = dict()  # initialize empty dictionary of neural net parameters W and b
-
-    if ini_type == 'plain':
-        params['W'] = np.random.randn(n_out, n_in) * 0.01  # set weights 'W' to small random gaussian
-    elif ini_type == 'xavier':
-        params['W'] = np.random.randn(n_out, n_in) / (np.sqrt(n_in))  # set variance of W to 1/n
-    elif ini_type == 'he':
-        # Good when ReLU used in hidden layers
-        # Delving Deep into Rectifiers: Surpassing Human-Level Performance on ImageNet Classification
-        # Kaiming He et al. (https://arxiv.org/abs/1502.01852)
-        # http: // cs231n.github.io / neural - networks - 2 /  # init
-        params['W'] = np.random.randn(n_out, n_in) * np.sqrt(2 / n_in)  # set variance of W to 2/n
-
-    params['b'] = np.zeros((n_out, 1))  # set bias 'b' to zeros
-
-    return params
+stop_words = ["i", "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your", "yours", "yourself",
+              "yourselves", "he", "him", "his", "himself", "she", "her", "hers", "herself", "it", "its", "itself",
+              "they", "them", "their", "theirs", "themselves", "what", "which", "who", "whom", "this", "that", "these",
+              "those", "am", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "having", "do",
+              "does", "did", "doing", "a", "an", "the", "and", "but", "if", "or", "because", "as", "until", "while",
+              "of", "at", "by", "for", "with", "about", "against", "between", "into", "through", "during", "before",
+              "after", "above", "below", "to", "from", "up", "down", "in", "out", "on", "off", "over", "under", "again",
+              "further", "then", "once", "here", "there", "when", "where", "why", "how", "all", "any", "both", "each",
+              "few", "more", "most", "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than",
+              "too", "very", "s", "t", "can", "will", "just", "don", "should", "now"]
+REPLACE_NO_SPACE = re.compile("[.;:!\'?,\"()\[\]]")
+REPLACE_WITH_SPACE = re.compile("(<br\s*/><br\s*/>)|(\-)|(\/)")
+REPLACE_STOP_WORDS = re.compile(r'\b(' + r'|'.join(stop_words) + r')\b\s*')
 
 
-class LinearLayer:
-    """
-        This Class implements all functions to be executed by a linear layer
-        in a computational graph
-        Args:
-            input_shape: input shape of Data/Activations
-            n_out: number of neurons in layer
-            ini_type: initialization type for weight parameters, default is "plain"
-                      Opitons are: plain, xavier and he
-        Methods:
-            forward(A_prev)
-            backward(upstream_grad)
-            update_params(learning_rate)
-    """
-
-    def __init__(self, input_shape, n_out, ini_type="plain"):
-        """
-        The constructor of the LinearLayer takes the following parameters
-        Args:
-            input_shape: input shape of Data/Activations
-            n_out: number of neurons in layer
-            ini_type: initialization type for weight parameters, default is "plain"
-        """
-
-        self.m = input_shape[1]  # number of examples in training data
-        # `params` store weights and bias in a python dictionary
-        self.params = initialize_parameters(input_shape[0], n_out, ini_type)  # initialize weights and bias
-        self.Z = np.zeros((self.params['W'].shape[0], input_shape[1]))  # create space for resultant Z output
-
-    def forward(self, A_prev):
-        """
-        This function performs the forwards propagation using activations from previous layer
-        Args:
-            A_prev:  Activations/Input Data coming into the layer from previous layer
-        """
-
-        self.A_prev = A_prev  # store the Activations/Training Data coming in
-        self.Z = np.dot(self.params['W'], self.A_prev) + self.params['b']  # compute the linear function
-
-    def backward(self, upstream_grad):
-        """
-        This function performs the back propagation using upstream gradients
-        Args:
-            upstream_grad: gradient coming in from the upper layer to couple with local gradient
-        """
-
-        # derivative of Cost w.r.t W
-        self.dW = np.dot(upstream_grad, self.A_prev.T)
-
-        # derivative of Cost w.r.t b, sum across rows
-        self.db = np.sum(upstream_grad, axis=1, keepdims=True)
-
-        # derivative of Cost w.r.t A_prev
-        self.dA_prev = np.dot(self.params['W'].T, upstream_grad)
-
-    def update_params(self, learning_rate=0.1):
-        """
-        This function performs the gradient descent update
-        Args:
-            learning_rate: learning rate hyper-param for gradient descent, default 0.1
-        """
-
-        self.params['W'] = self.params['W'] - learning_rate * self.dW  # update weights
-        self.params['b'] = self.params['b'] - learning_rate * self.db  # update bias(es)
+def get_file_data(path, stop_word_removal='no'):
+    with open(path) as f:
+        lines = f.readlines()
+    text = []
+    lines = lines[:500]
+    for line in lines:
+        review = line[:-1]
+        review = review[:200]
+        review = REPLACE_NO_SPACE.sub("", review.lower())
+        review = REPLACE_NO_SPACE.sub(" ", review.lower())
+        review = REPLACE_STOP_WORDS.sub(" ", review.lower())
+        review = ' '.join([w for w in review.split() if len(w) > 1])
+        text.append(review)
+    return text
 
 
-class SigmoidLayer:
-    """
-    This file implements activation layers
-    inline with a computational graph model
-    Args:
-        shape: shape of input to the layer
-    Methods:
-        forward(Z)
-        backward(upstream_grad)
-    """
+def generate_dictinoary_data(text):
+    word_to_index = dict()
+    index_to_word = dict()
+    corpus = []
+    count = 0
+    vocab_size = 0
 
-    def __init__(self, shape):
-        """
-        The consturctor of the sigmoid/logistic activation layer takes in the following arguments
-        Args:
-            shape: shape of input to the layer
-        """
-        self.A = np.zeros(shape)  # create space for the resultant activations
+    for row in text:
+        for word in row.split():
+            word = word.lower()
+            corpus.append(word)
+            if word_to_index.get(word) == None:
+                word_to_index.update({word: count})
+                index_to_word.update({count: word})
+                count += 1
+    vocab_size = len(word_to_index)
+    length_of_corpus = len(corpus)
 
-    def forward(self, Z):
-        """
-        This function performs the forwards propagation step through the activation function
-        Args:
-            Z: input from previous (linear) layer
-        """
-        self.A = 1 / (1 + np.exp(-Z))  # compute activations
-
-    def backward(self, upstream_grad):
-        """
-        This function performs the  back propagation step through the activation function
-        Local gradient => derivative of sigmoid => A*(1-A)
-        Args:
-            upstream_grad: gradient coming into this layer from the layer above
-        """
-        # couple upstream gradient with local gradient, the result will be sent back to the Linear layer
-        self.dZ = upstream_grad * self.A * (1 - self.A)
+    return word_to_index, index_to_word, corpus, vocab_size, length_of_corpus
 
 
-def compute_bce_cost(Y, P_hat):
-    """
-    This function computes Binary Cross-Entropy(bce) Cost and returns the Cost and its
-    derivative.
-    This function uses the following Binary Cross-Entropy Cost defined as:
-    => (1/m) * np.sum(-Y*np.log(P_hat) - (1-Y)*np.log(1-P_hat))
-    Args:
-        Y: labels of data
-        P_hat: Estimated output probabilities from the last layer, the output layer
-    Returns:
-        cost: The Binary Cross-Entropy Cost result
-        dP_hat: gradient of Cost w.r.t P_hat
-    """
-    m = Y.shape[1]  # m -> number of examples in the batch
-
-    cost = (1 / m) * np.sum(-Y * np.log(P_hat) - (1 - Y) * np.log(1 - P_hat))
-    cost = np.squeeze(cost)  # remove extraneous dimensions to give just a scalar (e.g. this turns [[17]] into 17)
-
-    dP_hat = (1 / m) * (-(Y / P_hat) + ((1 - Y) / (1 - P_hat)))
-
-    return cost, dP_hat
+text = ['Best way to success is through hardwork and persistence']
+word_to_index, index_to_word, corpus, vocab_size, length_of_corpus = generate_dictinoary_data(text)
+print('Number of unique words:', vocab_size)
+print('word_to_index : ', word_to_index)
+print('index_to_word : ', index_to_word)
+print('corpus:', corpus)
+print('Length of corpus :', length_of_corpus)
 
 
-def compute_stable_bce_cost(Y, Z):
-    """
-    This function computes the "Stable" Binary Cross-Entropy(stable_bce) Cost and returns the Cost and its
-    derivative w.r.t Z_last(the last linear node) .
-    The Stable Binary Cross-Entropy Cost is defined as:
-    => (1/m) * np.sum(max(Z,0) - ZY + log(1+exp(-|Z|)))
-    Args:
-        Y: labels of data
-        Z: Values from the last linear node
-    Returns:
-        cost: The "Stable" Binary Cross-Entropy Cost result
-        dZ_last: gradient of Cost w.r.t Z_last
-    """
-    m = Y.shape[1]
+def get_one_hot_vectors(target_word, context_words, vocab_size, word_to_index):
+    # Create an array of size = vocab_size filled with zeros
+    trgt_word_vector = np.zeros(vocab_size)
 
-    cost = (1 / m) * np.sum(np.maximum(Z, 0) - Z * Y + np.log(1 + np.exp(- np.abs(Z))))
-    dZ_last = (1 / m) * (
-            (1 / (1 + np.exp(- Z))) - Y)  # from Z computes the Sigmoid so P_hat - Y, where P_hat = sigma(Z)
+    # Get the index of the target_word according to the dictionary word_to_index.
+    # If target_word = best, the index according to the dictionary word_to_index is 0.
+    # So the one hot vector will be [1, 0, 0, 0, 0, 0, 0, 0, 0]
+    index_of_word_dictionary = word_to_index.get(target_word)
 
-    return cost, dZ_last
+    # Set the index to 1
+    trgt_word_vector[index_of_word_dictionary] = 1
+
+    # Repeat same steps for context_words but in a loop
+    ctxt_word_vector = np.zeros(vocab_size)
+
+    for word in context_words:
+        index_of_word_dictionary = word_to_index.get(word)
+        ctxt_word_vector[index_of_word_dictionary] = 1
+
+    return trgt_word_vector, ctxt_word_vector
 
 
-def compute_keras_like_bce_cost(Y, P_hat, from_logits=False):
-    """
-    This function computes the Binary Cross-Entropy(stable_bce) Cost function the way Keras
-    implements it. Accepting either probabilities(P_hat) from the sigmoid neuron or values direct
-    from the linear node(Z)
-    Args:
-        Y: labels of data
-        P_hat: Probabilities from sigmoid function
-        from_logits: flag to check if logits are being provided or not(Default: False)
-    Returns:
-        cost: The "Stable" Binary Cross-Entropy Cost result
-        dZ_last: gradient of Cost w.r.t Z_last
-    """
-    if from_logits:
-        # assume that P_hat contains logits and not probabilities
-        return compute_stable_bce_cost(Y, Z=P_hat)
+# Note : Below comments for trgt_word_index, ctxt_word_index are with the above sample text for understanding the code flow
 
-    else:
-        # Assume P_hat contains probabilities. So make logits out of them
+def generate_training_data(corpus, window_size, vocab_size, word_to_index, length_of_corpus, sample=None):
+    training_data = []
+    training_sample_words = []
+    for i, word in enumerate(corpus):
 
-        # First clip probabilities to stable range
-        EPSILON = 1e-07
-        P_MAX = 1 - EPSILON  # 0.9999999
+        index_target_word = i
+        target_word = word
+        context_words = []
 
-        P_hat = np.clip(P_hat, a_min=EPSILON, a_max=P_MAX)
+        # when target word is the first word
+        if i == 0:
 
-        # Second, Convert stable probabilities to logits(Z)
-        Z = np.log(P_hat / (1 - P_hat))
+            # trgt_word_index:(0), ctxt_word_index:(1,2)
+            context_words = [corpus[x] for x in range(i + 1, window_size + 1)]
 
-        # now call compute_stable_bce_cost
-        return compute_stable_bce_cost(Y, Z)
+            # when target word is the last word
+        elif i == len(corpus) - 1:
 
-def generate_training_data(text, word_to_index):
-    vector_data = []
-    for line in text:
-        vector = []
-        for word in line:
-            vector.append(word_to_index[word])
-        vector_data.append(vector)
-    return vector_data
+            # trgt_word_index:(9), ctxt_word_index:(8,7), length_of_corpus = 10
+            context_words = [corpus[x] for x in range(length_of_corpus - 2, length_of_corpus - 2 - window_size, -1)]
 
-dimension = 2
-window_size = 1
-learning_rate = 1
-number_of_epochs = 5000
-np.random.seed(48)
+        # When target word is the middle word
+        else:
 
-print('reading reviews')
+            # Before the middle target word
+            before_target_word_index = index_target_word - 1
+            for x in range(before_target_word_index, before_target_word_index - window_size, -1):
+                if x >= 0:
+                    context_words.extend([corpus[x]])
+
+            # After the middle target word
+            after_target_word_index = index_target_word + 1
+            for x in range(after_target_word_index, after_target_word_index + window_size):
+                if x < len(corpus):
+                    context_words.extend([corpus[x]])
+
+        trgt_word_vector, ctxt_word_vector = get_one_hot_vectors(target_word, context_words, vocab_size, word_to_index)
+        training_data.append([trgt_word_vector, ctxt_word_vector])
+
+        if sample is not None:
+            training_sample_words.append([target_word, context_words])
+
+    return training_data, training_sample_words
+
+
+text = ['Best way to success is through hardwork and persistence']
+word_to_index, index_to_word, corpus, vocab_size, length_of_corpus = generate_dictinoary_data(text)
+
+window_size = 2
+training_data, training_sample_words = generate_training_data(corpus, 2, vocab_size, word_to_index, length_of_corpus,
+                                                              'yes')
+
+for i in range(len(training_data)):
+    print('*' * 50)
+    print('Target word:%s . Target vector: %s ' % (training_sample_words[i][0], training_data[i][0]))
+    print('Context word:%s . Context  vector: %s ' % (training_sample_words[i][1], training_data[i][1]))
+
+
+def forward_prop(weight_inp_hidden, weight_hidden_output, target_word_vector):
+    # target_word_vector = x , weight_inp_hidden =  weights for input layer to hidden layer
+    hidden_layer = np.dot(weight_inp_hidden.T, target_word_vector)
+
+    # weight_hidden_output = weights for hidden layer to output layer
+    u = np.dot(weight_hidden_output.T, hidden_layer)
+
+    y_predicted = softmax(u)
+
+    return y_predicted, hidden_layer, u
+
+
+def softmax(x):
+    e_x = np.exp(x - np.max(x))
+    return e_x / e_x.sum(axis=0)
+
+
+def backward_prop(weight_inp_hidden, weight_hidden_output, total_error, hidden_layer, target_word_vector,
+                  learning_rate):
+    dl_weight_inp_hidden = np.outer(target_word_vector, np.dot(weight_hidden_output, total_error.T))
+    dl_weight_hidden_output = np.outer(hidden_layer, total_error)
+
+    # Update weights
+    weight_inp_hidden = weight_inp_hidden - (learning_rate * dl_weight_inp_hidden)
+    weight_hidden_output = weight_hidden_output - (learning_rate * dl_weight_hidden_output)
+
+    return weight_inp_hidden, weight_hidden_output
+
+
+def calculate_error(y_pred, context_words):
+    total_error = [None] * len(y_pred)
+    index_of_1_in_context_words = {}
+
+    for index in np.where(context_words == 1)[0]:
+        index_of_1_in_context_words.update({index: 'yes'})
+
+    number_of_1_in_context_vector = len(index_of_1_in_context_words)
+
+    for i, value in enumerate(y_pred):
+
+        if index_of_1_in_context_words.get(i) != None:
+            total_error[i] = (value - 1) + ((number_of_1_in_context_vector - 1) * value)
+        else:
+            total_error[i] = (number_of_1_in_context_vector * value)
+
+    return np.array(total_error)
+
+
+def calculate_loss(u, ctx):
+    sum_1 = 0
+    for index in np.where(ctx == 1)[0]:
+        sum_1 = sum_1 + u[index]
+
+    sum_1 = -sum_1
+    sum_2 = len(np.where(ctx == 1)[0]) * np.log(np.sum(np.exp(u)))
+
+    total_loss = sum_1 + sum_2
+    return total_loss
+
+
+def train(word_embedding_dimension, window_size, epochs, training_data, learning_rate, disp='no', interval=-1):
+    weights_input_hidden = np.random.uniform(-1, 1, (vocab_size, word_embedding_dimension))
+    weights_hidden_output = np.random.uniform(-1, 1, (word_embedding_dimension, vocab_size))
+
+    # For analysis purposes
+    epoch_loss = []
+    weights_1 = []
+    weights_2 = []
+
+    for epoch in range(epochs):
+        loss = 0
+
+        for target, context in training_data:
+            y_pred, hidden_layer, u = forward_prop(weights_input_hidden, weights_hidden_output, target)
+
+            total_error = calculate_error(y_pred, context)
+
+            weights_input_hidden, weights_hidden_output = backward_prop(
+                weights_input_hidden, weights_hidden_output, total_error, hidden_layer, target, learning_rate
+            )
+
+            loss_temp = calculate_loss(u, context)
+            loss += loss_temp
+
+        epoch_loss.append(loss)
+        weights_1.append(weights_input_hidden)
+        weights_2.append(weights_hidden_output)
+
+        if disp == 'yes':
+            if epoch == 0 or epoch % interval == 0 or epoch == epochs - 1:
+                print('Epoch: %s. Loss:%s' % (epoch, loss))
+    return epoch_loss, np.array(weights_1), np.array(weights_2)
+
+
+# Input vector, returns nearest word(s)
+def cosine_similarity(word, weight, word_to_index, vocab_size, index_to_word):
+    # Get the index of the word from the dictionary
+    index = word_to_index[word]
+
+    # Get the correspondin weights for the word
+    word_vector_1 = weight[index]
+
+    word_similarity = {}
+
+    for i in range(vocab_size):
+        word_vector_2 = weight[i]
+
+        theta_sum = np.dot(word_vector_1, word_vector_2)
+        theta_den = np.linalg.norm(word_vector_1) * np.linalg.norm(word_vector_2)
+        theta = theta_sum / theta_den
+
+        word = index_to_word[i]
+        word_similarity[word] = theta
+
+    return word_similarity  # words_sorted
+
+
+def print_similar_words(top_n_words, weight, msg, words_subset):
+    columns = []
+
+    for i in range(0, len(words_subset)):
+        columns.append('similar:' + str(i + 1))
+
+    df = pd.DataFrame(columns=columns, index=words_subset)
+    df.head()
+
+    row = 0
+    for word in words_subset:
+
+        # Get the similarity matrix for the word: word
+        similarity_matrix = cosine_similarity(word, weight, word_to_index, vocab_size, index_to_word)
+        col = 0
+
+        # Sort the top_n_words
+        words_sorted = dict(sorted(similarity_matrix.items(), key=lambda x: x[1], reverse=True)[1:top_n_words + 1])
+
+        # Create a dataframe to display the similarity matrix
+        for similar_word, similarity_value in words_sorted.items():
+            df.iloc[row][col] = (similar_word, round(similarity_value, 2))
+            col += 1
+        row += 1
+    styles = [dict(selector='caption',
+                   props=[('text-align', 'center'), ('font-size', '20px'), ('color', 'red')])]
+    df = df.style.set_properties(**
+                                 {'color': 'green', 'border-color': 'blue', 'font-size': '14px'}
+                                 ).set_table_styles(styles).set_caption(msg)
+    return df
+
+
+def plot_epoch_loss(lbl, loss_epoch, plot_title):
+    colors = ['b', 'g', 'r', 'c', 'm', 'y', 'k', 'w']
+    i = 0
+    fig = plt.figure(figsize=(10, 5), facecolor='w', edgecolor='k', dpi=80)
+    plt.suptitle('Epoch vs Loss', fontsize=16)
+
+    for key, loss in loss_epoch.items():
+        epoch_count = range(1, len(loss) + 1)
+
+        plt.plot(epoch_count, loss, 'r-', color=colors[i], linewidth=2.0, label=lbl + str(key))
+
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        i += 1
+
+    plt.legend(framealpha=1, frameon=True, fontsize='large', edgecolor="inherit", shadow=True)
+    plt.title(plot_title)
+    plt.show()
+    plt.close()
+
+window_size = 2
+dimension = 70
+epochs = 1000
+learning_rate = 0.01
+text = ['Best way to success is through hardwork and persistence']
 data_text = get_file_data('./data/reviews.txt')
+
+print('gen_dict')
 word_to_index, index_to_word, corpus, vocab_size, length_of_corpus = generate_dictinoary_data(data_text)
-n_inputs = vocab_size
-n_outputs = 2  # len(train_y[0])
-data = generate_training_data(data_text, word_to_index)
+print('gen_train')
+training_data, training_sample_words = generate_training_data(corpus, window_size, vocab_size, word_to_index,
+                                                              length_of_corpus)
 
-weights_input_hidden = np.random.uniform(-1, 1, (vocab_size, dimension))
-
-weights_hidden_output = np.random.uniform(-1, 1, (dimension, vocab_size))
-
-print('reading labels')
-labels_text = get_file_data('./data/labels.txt')
-labels = generate_training_label(labels_text)
-
-print('preparing data')
-shuffle_arrays([data, labels])
-
-train_x, train_y = data[0:int(0.1 * len(data))], labels[0:int(0.1 * len(labels))]
-test_x, test_y = data[int(0.05 * len(data)):-1], labels[int(0.05 * len(labels)):-1]
-
-# Training and validation split. (%80-%20)
-valid_x = np.asarray(train_x[int(0.8 * len(train_x)):-1])
-valid_y = np.asarray(train_y[int(0.8 * len(train_y)):-1])
-X_train = np.asarray(train_x[0:int(0.8 * len(train_x))])
-Y_train = np.asarray(train_y[0:int(0.8 * len(train_y))])
-
-print('training')
-
-# ------ LAYER-1 ----- define output layer that takes in training data
-Z1 = LinearLayer(input_shape=X_train.shape, n_out=1, ini_type='plain')
-A1 = SigmoidLayer(Z1.Z.shape)
-
-costs = []  # initially empty list, this will store all the costs after a certain number of epochs
-
-# Start training
-for epoch in range(number_of_epochs):
-    # ------------------------- forward-prop -------------------------
-    Z1.forward(X_train)
-    A1.forward(Z1.Z)
-
-    # ---------------------- Compute Cost ----------------------------
-    cost, dZ1 = compute_stable_bce_cost(Y_train, Z1.Z)
-    # print and store Costs every 100 iterations and of the last iteration.
-    print("Cost at epoch#{}: {}".format(epoch, cost))
-    costs.append(cost)
-
-    # ------------------------- back-prop ----------------------------
-    Z1.backward(dZ1)
-
-    # ----------------------- Update weights and bias ----------------
-    Z1.update_params(learning_rate=learning_rate)
+print('train')
+epoch_loss, weights_1, weights_2 = train(dimension, window_size, epochs, training_data, learning_rate, disp='yes')
+print(epoch_loss)

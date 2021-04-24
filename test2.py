@@ -1,9 +1,7 @@
-from math import exp
-from random import seed
-from random import random
 import numpy as np
-import re
-import time
+import string
+
+from read_data import get_file_data, generate_training_data, generate_dictinoary_data
 
 stop_words = ["i", "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your", "yours", "yourself",
               "yourselves", "he", "him", "his", "himself", "she", "her", "hers", "herself", "it", "its", "itself",
@@ -16,237 +14,139 @@ stop_words = ["i", "me", "my", "myself", "we", "our", "ours", "ourselves", "you"
               "few", "more", "most", "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than",
               "too", "very", "s", "t", "can", "will", "just", "don", "should", "now"]
 
-REPLACE_NO_SPACE = re.compile("[.;:!\'?,\"()\[\]]")
-REPLACE_WITH_SPACE = re.compile("(<br\s*/><br\s*/>)|(\-)|(\/)")
-REPLACE_STOP_WORDS = re.compile(r'\b(' + r'|'.join(stop_words) + r')\b\s*')
 
-dimension = 2
-epochs = 10
+def softmax(x):
+    """Compute softmax values for each sets of scores in x."""
+    e_x = np.exp(x - np.max(x))
+    return e_x / e_x.sum()
+
+
+class word2vec(object):
+    def __init__(self):
+        self.N = 10
+        self.X_train = []
+        self.y_train = []
+        self.window_size = 2
+        self.alpha = 0.001
+        self.words = []
+        self.word_index = {}
+
+    def initialize(self, V, data):
+        self.V = V
+        self.W = np.random.uniform(-0.8, 0.8, (self.V, self.N))
+        self.W1 = np.random.uniform(-0.8, 0.8, (self.N, self.V))
+
+        self.words = data
+        for i in range(len(data)):
+            self.word_index[data[i]] = i
+
+    def feed_forward(self, X):
+        self.h = np.dot(self.W.T, X).reshape(self.N, 1)
+        self.u = np.dot(self.W1.T, self.h)
+        # print(self.u)
+        self.y = softmax(self.u)
+        return self.y
+
+    def backpropagate(self, x, t):
+        e = self.y - np.asarray(t).reshape(self.V, 1)
+        # e.shape is V x 1
+        dLdW1 = np.dot(self.h, e.T)
+        X = np.array(x).reshape(self.V, 1)
+        dLdW = np.dot(X, np.dot(self.W1, e).T)
+        self.W1 = self.W1 - self.alpha * dLdW1
+        self.W = self.W - self.alpha * dLdW
+
+    def train(self, epochs):
+        for x in range(1, epochs):
+            self.loss = 0
+            for j in range(len(self.X_train)):
+                self.feed_forward(self.X_train[j])
+                self.backpropagate(self.X_train[j], self.y_train[j])
+                C = 0
+                for m in range(self.V):
+                    if (self.y_train[j][m]):
+                        self.loss += -1 * self.u[m][0]
+                        C += 1
+                self.loss += C * np.log(np.sum(np.exp(self.u)))
+            print("epoch ", x, " loss = ", self.loss)
+            self.alpha *= 1 / ((1 + self.alpha * x))
+
+    def predict(self, word, number_of_predictions):
+        if word in self.words:
+            index = self.word_index[word]
+            X = [0 for i in range(self.V)]
+            X[index] = 1
+            prediction = self.feed_forward(X)
+            output = {}
+            for i in range(self.V):
+                output[prediction[i][0]] = i
+
+            top_context_words = []
+            for k in sorted(output, reverse=True):
+                top_context_words.append(self.words[output[k]])
+                if (len(top_context_words) >= number_of_predictions):
+                    break
+
+            return top_context_words
+        else:
+            print("Word not found in dicitonary")
+
+
+def preprocessing(sentences):
+    training_data = []
+    for i in range(len(sentences)):
+        sentences[i] = sentences[i].strip()
+        sentence = sentences[i].split()
+        x = [word.strip(string.punctuation) for word in sentence
+             if word not in stop_words]
+        x = [word.lower() for word in x]
+        training_data.append(x)
+    return training_data
+
+
+def prepare_data_for_training(sentences, w2v):
+    data = {}
+    for sentence in sentences:
+        for word in sentence:
+            if word not in data:
+                data[word] = 1
+            else:
+                data[word] += 1
+    V = len(data)
+    data = sorted(list(data.keys()))
+    vocab = {}
+    for i in range(len(data)):
+        vocab[data[i]] = i
+
+    # for i in range(len(words)):
+    for sentence in sentences:
+        for i in range(len(sentence)):
+            center_word = vocab[sentence[i]]
+            context = [0 for x in range(V)]
+
+            for j in range(i - w2v.window_size, i + w2v.window_size):
+                if i != j and 0 <= j < len(sentence):
+                    context[vocab[sentence[j]]] += 1
+            w2v.X_train.append(center_word)
+            w2v.y_train.append(context)
+    w2v.initialize(V, data)
+
+    return w2v.X_train, w2v.y_train
+
+window_size = 2
+epochs = 100
 learning_rate = 0.01
-window_size = 1
-
-
-# Initialize a network
-def initialize_network(n_inputs, n_hidden, n_outputs):
-    network = list()
-    hidden_layer = [{'weights': [random() for i in range(n_inputs + 1)]} for i in range(n_hidden)]
-    network.append(hidden_layer)
-    output_layer = [{'weights': [random() for i in range(n_hidden + 1)]} for i in range(n_outputs)]
-    network.append(output_layer)
-    return network
-
-
-# Calculate neuron activation for an input
-def activate(weights, inputs):
-    activation = weights[-1]
-    for i in range(len(weights) - 1):
-        activation += weights[i] * inputs[i]
-    return activation
-
-
-# Transfer neuron activation
-def transfer(activation):
-    return 1.0 / (1.0 + exp(-activation))
-
-
-# Forward propagate input to a network output
-def forward_propagate(network, row):
-    inputs = row
-    for layer in network:
-        new_inputs = []
-        for neuron in layer:
-            activation = activate(neuron['weights'], inputs)
-            neuron['output'] = transfer(activation)
-            new_inputs.append(neuron['output'])
-        inputs = new_inputs
-    return inputs
-
-
-# Calculate the derivative of an neuron output
-def transfer_derivative(output):
-    return output * (1.0 - output)
-
-
-# Backpropagate error and store in neurons
-def backward_propagate_error(network, expected):
-    for i in reversed(range(len(network))):
-        layer = network[i]
-        errors = list()
-        if i != len(network) - 1:
-            for j in range(len(layer)):
-                error = 0.0
-                for neuron in network[i + 1]:
-                    error += (neuron['weights'][j] * neuron['delta'])
-                errors.append(error)
-        else:
-            for j in range(len(layer)):
-                neuron = layer[j]
-                errors.append(expected[j] - neuron['output'])
-        for j in range(len(layer)):
-            neuron = layer[j]
-            neuron['delta'] = errors[j] * transfer_derivative(neuron['output'])
-
-
-# Update network weights with error
-def update_weights(network, row, l_rate):
-    for i in range(len(network)):
-        inputs = row[:-1]
-        if i != 0:
-            inputs = [neuron['output'] for neuron in network[i - 1]]
-        for neuron in network[i]:
-            for j in range(len(inputs)):
-                neuron['weights'][j] += l_rate * neuron['delta'] * inputs[j]
-            neuron['weights'][-1] += l_rate * neuron['delta']
-
-
-# Train a network for a fixed number of epochs
-def train_network(network, train_x, train_y, valid_data, valid_labels, l_rate, n_epoch, n_outputs):
-    for epoch in range(n_epoch):
-        sum_error = 0
-        index = 0
-        for row, label in zip(train_x, train_y):
-            outputs = forward_propagate(network, row)
-            backward_propagate_error(network, label)
-            update_weights(network, row, l_rate)
-            if index % 100 == 0 and index != 0:
-                accuracy, loss = test(network, valid_data, valid_labels)
-                print("Epoch= " + str(epoch) + ", Coverage= %" + str(
-                    100 * (index / len(train_x))) + ", Accuracy= " + str(accuracy) + ", Loss= " + str(loss))
-            index += 1
-
-
-def get_file_data(path):
-    with open(path) as f:
-        lines = f.readlines()
-    text = []
-    for line in lines:
-        review = line[:-1]
-        review = REPLACE_NO_SPACE.sub("", review.lower())
-        review = REPLACE_NO_SPACE.sub(" ", review.lower())
-        review = REPLACE_STOP_WORDS.sub(" ", review.lower())
-        review = ' '.join([w for w in review.split() if len(w) > 1])
-        text.append(review)
-    return text
-
-
-def generate_dictinoary_data(text):
-    word_to_index = dict()
-    index_to_word = dict()
-    corpus = []
-    count = 0
-    for row in text:
-        for word in row.split():
-            word = word.lower()
-            corpus.append(word)
-            if word_to_index.get(word) is None:
-                word_to_index.update({word: count})
-                index_to_word.update({count: word})
-                count += 1
-    vocab_size = len(word_to_index)
-    length_of_corpus = len(corpus)
-    return word_to_index, index_to_word, corpus, vocab_size, length_of_corpus
-
-
-def get_one_hot_vectors(context_words, vocab_size, word_to_index):
-    ctxt_word_vector = np.zeros(vocab_size)
-    words = context_words.split(' ')[0:200]
-    for word in words:
-        index_of_word_dictionary = word_to_index.get(word)
-        if index_of_word_dictionary is not None:
-            ctxt_word_vector[index_of_word_dictionary] = 1
-
-    return ctxt_word_vector
-
-
-def generate_training_data(text, word_to_index):
-    vector_data = []
-    for line in text:
-        vector = []
-        for word in line.split(" ")[:200]:
-            vector.append(word_to_index[word])
-        vector_data.append(vector)
-        for i in range(len(vector), 200):
-            vector.append(-1)
-
-    return vector_data
-
-
-def generate_training_label(labels_text):
-    vector_data = []
-    for label in labels_text:
-        if label == 'positive':
-            vector_data.append([1, 0])
-        else:
-            vector_data.append([0, 1])
-    return vector_data
-
-
-def shuffle_arrays(arrays, set_seed=-1):
-    assert all(len(arr) == len(arrays[0]) for arr in arrays)
-    seed = np.random.randint(0, 2 ** (32 - 1) - 1) if set_seed < 0 else set_seed
-
-    for arr in arrays:
-        random_state = np.random.RandomState(seed)
-        random_state.shuffle(arr)
-
-
-def sigmoid(layer):
-    return 1 / (1 + np.exp(-layer))
-
-
-def test(network, test_data, test_labels):
-    avg_loss = 0
-    predictions = []
-
-    for data, label in zip(test_data, test_labels):  # Turns through all data
-        prediction = forward_propagate(network, data)
-        predictions.append(prediction)
-
-    accuracy_score = accuracy(test_labels, predictions)
-    return accuracy_score, 0
-
-
-def accuracy(true_labels, predictions):
-    true_pred = 0
-
-    for i in range(len(predictions)):
-        if np.argmax(true_labels[i]) == np.argmax(predictions[i]):
-            true_pred += 1
-
-    return true_pred / len(predictions)
-
-
-# Test training backprop algorithm
-seed(1)
-print('reading reviews')
+dimension = 20
 data_text = get_file_data('./data/reviews.txt')
+
 word_to_index, index_to_word, corpus, vocab_size, length_of_corpus = generate_dictinoary_data(data_text)
-n_inputs = 200
-n_outputs = 2  # len(train_y[0])
-network = initialize_network(n_inputs, 128, n_outputs)
-data = generate_training_data(data_text, word_to_index)
+training_data = generate_training_data(data_text, word_to_index)
+epochs = 1000
 
-weights_input_hidden = np.random.uniform(-1, 1, (200, dimension))
+training_data = preprocessing(data_text)
+w2v = word2vec()
 
-weights_hidden_output = np.random.uniform(-1, 1, (dimension, 1))
+prepare_data_for_training(training_data, w2v)
+w2v.train(epochs)
 
-print('reading labels')
-labels_text = get_file_data('./data/labels.txt')
-labels = generate_training_label(labels_text)
-
-print('preparing data')
-shuffle_arrays([data, labels])
-
-train_x, train_y = data[0:int(0.1 * len(data))], labels[0:int(0.1 * len(labels))]
-test_x, test_y = data[int(0.05 * len(data)):-1], labels[int(0.05 * len(labels)):-1]
-
-# Training and validation split. (%80-%20)
-valid_x = np.asarray(train_x[int(0.8 * len(train_x)):-1])
-valid_y = np.asarray(train_y[int(0.8 * len(train_y)):-1])
-train_x = np.asarray(train_x[0:int(0.8 * len(train_x))])
-train_y = np.asarray(train_y[0:int(0.8 * len(train_y))])
-
-print('training')
-train_network(network, train_x, train_y, valid_x, valid_y, 0.01, 20, n_outputs)
-for layer in network:
-    print(layer)
+print(w2v.predict("around", 3))
