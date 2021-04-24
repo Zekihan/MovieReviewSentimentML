@@ -1,6 +1,9 @@
+from math import exp
+from random import seed
+from random import random
 import numpy as np
-import random
 import re
+import time
 
 stop_words = ["i", "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your", "yours", "yourself",
               "yourselves", "he", "him", "his", "himself", "she", "her", "hers", "herself", "it", "its", "itself",
@@ -17,28 +20,20 @@ REPLACE_NO_SPACE = re.compile("[.;:!\'?,\"()\[\]]")
 REPLACE_WITH_SPACE = re.compile("(<br\s*/><br\s*/>)|(\-)|(\/)")
 REPLACE_STOP_WORDS = re.compile(r'\b(' + r'|'.join(stop_words) + r')\b\s*')
 
-# HYPERPARAMETERS
-input_size = 200
-output_size = 1
-embedding_size = 200
-hidden_layer_size = 16
-learning_rate = 0.5
-number_of_epochs = 50
-path = "./data"  # please use relative path like this
-
-n_inputs = 200
-n_hidden = 2
-n_outputs = 1
-network = []
+dimension = 2
+epochs = 10
+learning_rate = 0.01
+window_size = 1
 
 
-def initialize_parameters():
-    local_network = list()
-    hidden_layer = [{'weights': [random.random() for _ in range(n_inputs + 1)]} for _ in range(n_hidden)]
-    local_network.append(hidden_layer)
-    output_layer = [{'weights': [random.random() for _ in range(n_hidden + 1)]} for _ in range(n_outputs)]
-    local_network.append(output_layer)
-    return local_network
+# Initialize a network
+def initialize_network(n_inputs, n_hidden, n_outputs):
+    network = list()
+    hidden_layer = [{'weights': [random() for i in range(n_inputs + 1)]} for i in range(n_hidden)]
+    network.append(hidden_layer)
+    output_layer = [{'weights': [random() for i in range(n_hidden + 1)]} for i in range(n_outputs)]
+    network.append(output_layer)
+    return network
 
 
 # Calculate neuron activation for an input
@@ -51,41 +46,12 @@ def activate(weights, inputs):
 
 # Transfer neuron activation
 def transfer(activation):
-    return 1.0 / (1.0 + np.exp(-activation))
+    return 1.0 / (1.0 + exp(-activation))
 
 
-def activation_function(layer):
-    return 1 / (1 + np.exp(-layer))
-
-
-def derivation_of_activation_function(signal):
-    s = 1 / (1 + np.exp(-signal))
-    return s * (1 - s)
-
-
-def loss_function(true_labels, probabilities):
-    sum_score = 0.0
-    for i in range(len(true_labels)):
-        sum_score += true_labels[i] * np.log(1e-15 + probabilities[i])
-    mean_sum_score = 1.0 / len(true_labels) * sum_score
-    return -mean_sum_score
-
-
-def sigmoid(layer):
-    return 1 / (1 + np.exp(-layer))
-
-
-def derivation_of_loss_function(true_labels, probabilities):
-    sum_score = 0.0
-    for i in range(len(true_labels)):
-        sum_score += true_labels[i] * np.log(1e-15 + probabilities[i])
-    mean_sum_score = 1.0 / len(true_labels) * sum_score
-    return -mean_sum_score
-
-
-# the derivation should be with respect to the output neurons
-
-def forward_pass(inputs):
+# Forward propagate input to a network output
+def forward_propagate(network, row):
+    inputs = row
     for layer in network:
         new_inputs = []
         for neuron in layer:
@@ -95,10 +61,14 @@ def forward_pass(inputs):
         inputs = new_inputs
     return inputs
 
+
+# Calculate the derivative of an neuron output
 def transfer_derivative(output):
     return output * (1.0 - output)
 
-def backward_pass(data, predictions, loss_signals):
+
+# Backpropagate error and store in neurons
+def backward_propagate_error(network, expected):
     for i in reversed(range(len(network))):
         layer = network[i]
         errors = list()
@@ -117,50 +87,32 @@ def backward_pass(data, predictions, loss_signals):
             neuron['delta'] = errors[j] * transfer_derivative(neuron['output'])
 
 
-def train(train_data, train_labels, valid_data, valid_labels):
-    for epoch in range(number_of_epochs):
+# Update network weights with error
+def update_weights(network, row, l_rate):
+    for i in range(len(network)):
+        inputs = row[:-1]
+        if i != 0:
+            inputs = [neuron['output'] for neuron in network[i - 1]]
+        for neuron in network[i]:
+            for j in range(len(inputs)):
+                neuron['weights'][j] += l_rate * neuron['delta'] * inputs[j]
+            neuron['weights'][-1] += l_rate * neuron['delta']
+
+
+# Train a network for a fixed number of epochs
+def train_network(network, train_x, train_y, valid_data, valid_labels, l_rate, n_epoch, n_outputs):
+    for epoch in range(n_epoch):
+        sum_error = 0
         index = 0
-
-        # Same thing about [hidden_layers] mentioned above is valid here also
-        for data, labels in zip(train_data, train_labels):
-            predictions = forward_pass(data)
-            loss_signals = derivation_of_loss_function(labels, predictions)
-            backward_pass(data, predictions, loss_signals)
-            loss = loss_function(labels, predictions)
-
-            if index % 2000 == 0:  # at each 2000th sample, we run validation set to see our model's improvements
-                accuracy, loss = test(valid_data, valid_labels)
+        for row, label in zip(train_x, train_y):
+            outputs = forward_propagate(network, row)
+            backward_propagate_error(network, label)
+            update_weights(network, row, l_rate)
+            if index % 100 == 0 and index != 0:
+                accuracy, loss = test(network, valid_data, valid_labels)
                 print("Epoch= " + str(epoch) + ", Coverage= %" + str(
-                    100 * (index / len(train_data))) + ", Accuracy= " + str(accuracy) + ", Loss= " + str(loss))
-
+                    100 * (index / len(train_x))) + ", Accuracy= " + str(accuracy) + ", Loss= " + str(loss))
             index += 1
-
-    return loss
-
-
-def test(test_data, test_labels):
-    avg_loss = 0
-    predictions = []
-    labels = []
-
-    for data, label in zip(test_data, test_labels):  # Turns through all data
-        prediction, _, _ = forward_pass(data)
-        predictions.append(prediction)
-        labels.append(label)
-        avg_loss += np.sum(loss_function(label, prediction))
-
-    accuracy_score = accuracy(labels, predictions)
-
-    return accuracy_score, avg_loss / len(test_data)
-
-
-def accuracy(true_labels, predictions):
-    true_pred = 0
-
-    for i in range(len(predictions)):
-        true_pred += 1
-
-    return true_pred / len(predictions)
 
 
 def get_file_data(path):
@@ -223,9 +175,9 @@ def generate_training_label(labels_text):
     vector_data = []
     for label in labels_text:
         if label == 'positive':
-            vector_data.append([1])
+            vector_data.append([1, 0])
         else:
-            vector_data.append([0])
+            vector_data.append([0, 1])
     return vector_data
 
 
@@ -238,28 +190,63 @@ def shuffle_arrays(arrays, set_seed=-1):
         random_state.shuffle(arr)
 
 
-if __name__ == "__main__":
-    # read data from text files
-    data_text = get_file_data('./data/reviews.txt')
-    word_to_index, index_to_word, corpus, vocab_size, length_of_corpus = generate_dictinoary_data(data_text)
-    n_inputs = vocab_size
-    data = generate_training_data(data_text, word_to_index)
-    labels_text = get_file_data('./data/labels.txt')
-    labels = generate_training_label(labels_text)
+def sigmoid(layer):
+    return 1 / (1 + np.exp(-layer))
 
-    shuffle_arrays([data, labels])
 
-    network = initialize_parameters()
+def test(network, test_data, test_labels):
+    avg_loss = 0
+    predictions = []
 
-    train_x, train_y = data[int(0.8 * len(data)):-1], labels[int(0.8 * len(labels)):-1]
-    test_x, test_y = data[0:int(0.8 * len(data))], labels[0:int(0.8 * len(labels))]
+    for data, label in zip(test_data, test_labels):  # Turns through all data
+        prediction = forward_propagate(network, data)
+        predictions.append(prediction)
 
-    # Training and validation split. (%80-%20)
-    valid_x = np.asarray(train_x[int(0.8 * len(train_x)):-1])
-    valid_y = np.asarray(train_y[int(0.8 * len(train_y)):-1])
-    train_x = np.asarray(train_x[0:int(0.8 * len(train_x))])
-    train_y = np.asarray(train_y[0:int(0.8 * len(train_y))])
+    accuracy_score = accuracy(test_labels, predictions)
+    return accuracy_score, 0
 
-    train(train_x, train_y, valid_x, valid_y)
-    print("Test Scores:")
-    print(test(test_x, test_y))
+
+def accuracy(true_labels, predictions):
+    true_pred = 0
+
+    for i in range(len(predictions)):
+        if np.argmax(true_labels[i]) == np.argmax(predictions[i]):
+            true_pred += 1
+
+    return true_pred / len(predictions)
+
+
+# Test training backprop algorithm
+seed(1)
+print('reading reviews')
+data_text = get_file_data('./data/reviews.txt')
+word_to_index, index_to_word, corpus, vocab_size, length_of_corpus = generate_dictinoary_data(data_text)
+n_inputs = 200
+n_outputs = 2  # len(train_y[0])
+network = initialize_network(n_inputs, 128, n_outputs)
+data = generate_training_data(data_text, word_to_index)
+
+weights_input_hidden = np.random.uniform(-1, 1, (200, dimension))
+
+weights_hidden_output = np.random.uniform(-1, 1, (dimension, 1))
+
+print('reading labels')
+labels_text = get_file_data('./data/labels.txt')
+labels = generate_training_label(labels_text)
+
+print('preparing data')
+shuffle_arrays([data, labels])
+
+train_x, train_y = data[0:int(0.1 * len(data))], labels[0:int(0.1 * len(labels))]
+test_x, test_y = data[int(0.05 * len(data)):-1], labels[int(0.05 * len(labels)):-1]
+
+# Training and validation split. (%80-%20)
+valid_x = np.asarray(train_x[int(0.8 * len(train_x)):-1])
+valid_y = np.asarray(train_y[int(0.8 * len(train_y)):-1])
+train_x = np.asarray(train_x[0:int(0.8 * len(train_x))])
+train_y = np.asarray(train_y[0:int(0.8 * len(train_y))])
+
+print('training')
+train_network(network, train_x, train_y, valid_x, valid_y, 0.01, 20, n_outputs)
+for layer in network:
+    print(layer)
