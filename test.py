@@ -76,73 +76,22 @@ def generate_dictinoary_data(text):
     return word_to_index, index_to_word, corpus, vocab_size, length_of_corpus
 
 
-def get_one_hot_vectors(target_word, context_words, vocab_size, word_to_index):
-    # Create an array of size = vocab_size filled with zeros
-    trgt_word_vector = np.zeros(vocab_size)
-
-    # Get the index of the target_word according to the dictionary word_to_index.
-    # If target_word = best, the index according to the dictionary word_to_index is 0.
-    # So the one hot vector will be [1, 0, 0, 0, 0, 0, 0, 0, 0]
-    index_of_word_dictionary = word_to_index.get(target_word)
-
-    # Set the index to 1
-    trgt_word_vector[index_of_word_dictionary] = 1
-
-    # Repeat same steps for context_words but in a loop
+def get_one_hot_vectors(target_word, vocab_size, word_to_index):
     ctxt_word_vector = np.zeros(vocab_size)
-
-    for word in context_words:
+    for word in target_word:
         index_of_word_dictionary = word_to_index.get(word)
         ctxt_word_vector[index_of_word_dictionary] = 1
 
-    return trgt_word_vector, ctxt_word_vector
+    return ctxt_word_vector
 
 
-# Note : Below comments for trgt_word_index, ctxt_word_index are with the above sample text for understanding the code flow
-
-def generate_training_data(corpus, window_size, vocab_size, word_to_index, length_of_corpus, sample=None):
+def generate_training_data(word_to_index, index_to_word, vocab_size, data_text, labels):
     training_data = []
-    training_sample_words = []
-    for i, word in enumerate(corpus):
-
-        index_target_word = i
-        target_word = word
+    for i, text in enumerate(data_text):
         context_words = []
-
-        # when target word is the first word
-        if i == 0:
-
-            # trgt_word_index:(0), ctxt_word_index:(1,2)
-            context_words = [corpus[x] for x in range(i + 1, window_size + 1)]
-
-            # when target word is the last word
-        elif i == len(corpus) - 1:
-
-            # trgt_word_index:(9), ctxt_word_index:(8,7), length_of_corpus = 10
-            context_words = [corpus[x] for x in range(length_of_corpus - 2, length_of_corpus - 2 - window_size, -1)]
-
-        # When target word is the middle word
-        else:
-
-            # Before the middle target word
-            before_target_word_index = index_target_word - 1
-            for x in range(before_target_word_index, before_target_word_index - window_size, -1):
-                if x >= 0:
-                    context_words.extend([corpus[x]])
-
-            # After the middle target word
-            after_target_word_index = index_target_word + 1
-            for x in range(after_target_word_index, after_target_word_index + window_size):
-                if x < len(corpus):
-                    context_words.extend([corpus[x]])
-
-        trgt_word_vector, ctxt_word_vector = get_one_hot_vectors(target_word, context_words, vocab_size, word_to_index)
-        training_data.append([trgt_word_vector, ctxt_word_vector])
-
-        if sample is not None:
-            training_sample_words.append([target_word, context_words])
-
-    return training_data, training_sample_words
+        trgt_word_vector = get_one_hot_vectors(data_text[i], vocab_size, word_to_index)
+        training_data.append([trgt_word_vector, labels[i]])
+    return training_data
 
 
 def forward_prop(weight_inp_hidden, weight_hidden_output, target_word_vector):
@@ -175,22 +124,7 @@ def backward_prop(weight_inp_hidden, weight_hidden_output, total_error, hidden_l
 
 
 def calculate_error(y_pred, context_words):
-    total_error = [None] * len(y_pred)
-    index_of_1_in_context_words = {}
-
-    for index in np.where(context_words == 1)[0]:
-        index_of_1_in_context_words.update({index: 'yes'})
-
-    number_of_1_in_context_vector = len(index_of_1_in_context_words)
-
-    for i, value in enumerate(y_pred):
-
-        if index_of_1_in_context_words.get(i) != None:
-            total_error[i] = (value - 1) + ((number_of_1_in_context_vector - 1) * value)
-        else:
-            total_error[i] = (number_of_1_in_context_vector * value)
-
-    return np.array(total_error)
+    return np.sqrt((y_pred[0] - context_words[0]) ** 2)
 
 
 def calculate_loss(u, ctx):
@@ -205,9 +139,11 @@ def calculate_loss(u, ctx):
     return total_loss
 
 
-def train(word_embedding_dimension, window_size, epochs, training_data, learning_rate, disp='no', interval=-1):
+def train(word_embedding_dimension, window_size, epochs, training_data, learning_rate, valid_d,
+          disp='no',
+          interval=-1):
     weights_input_hidden = np.random.uniform(-1, 1, (vocab_size, word_embedding_dimension))
-    weights_hidden_output = np.random.uniform(-1, 1, (word_embedding_dimension, vocab_size))
+    weights_hidden_output = np.random.uniform(-1, 1, (word_embedding_dimension, 1))
 
     # For analysis purposes
     epoch_loss = []
@@ -216,7 +152,7 @@ def train(word_embedding_dimension, window_size, epochs, training_data, learning
 
     for epoch in range(epochs):
         loss = 0
-
+        index = 0
         for target, context in training_data:
             y_pred, hidden_layer, u = forward_prop(weights_input_hidden, weights_hidden_output, target)
 
@@ -229,6 +165,11 @@ def train(word_embedding_dimension, window_size, epochs, training_data, learning
             loss_temp = calculate_loss(u, context)
             loss += loss_temp
 
+            if index % 2000 == 0:  # at each 2000th sample, we run validation set to see our model's improvements
+                accuracy, loss = test(valid_d, weights_input_hidden, weights_hidden_output)
+                print("Epoch= " + str(epoch) + ", Coverage= %" + str(
+                    100 * (index / len(training_data))) + ", Accuracy= " + str(accuracy) + ", Loss= " + str(loss))
+            index += 1
         epoch_loss.append(loss)
         weights_1.append(weights_input_hidden)
         weights_2.append(weights_hidden_output)
@@ -239,15 +180,54 @@ def train(word_embedding_dimension, window_size, epochs, training_data, learning
     return epoch_loss, np.array(weights_1), np.array(weights_2)
 
 
+def test(valid_d, weights_input_hidden, weights_hidden_output):
+    avg_loss = 0
+    predictions = []
+    labels = []
+
+    for data, label in valid_d:  # Turns through all data
+        y_pred, hidden_layer, u = forward_prop(weights_input_hidden, weights_hidden_output, data)
+        predictions.append(y_pred)
+        labels.append(label)
+        avg_loss += np.sum(calculate_loss(label, y_pred))
+
+    accuracy_score = accuracy(labels, predictions)
+
+    return accuracy_score, avg_loss / len(valid_d)
+
+
+def accuracy(true_labels, predictions):
+    true_pred = 0
+
+    # for i in range(len(predictions)):
+    	# if ...
+    	# 	true_pred += 1
+
+    return true_pred / len(predictions)
+
+
 window_size = 2
 epochs = 100
 learning_rate = 0.01
 dimension = 20
 data_text = get_file_data('./data/reviews.txt')
 
+labels_text = get_file_data('./data/labels.txt')
+labels = generate_training_label(labels_text)
+
 word_to_index, index_to_word, corpus, vocab_size, length_of_corpus = generate_dictinoary_data(data_text)
-training_data, training_sample_words = generate_training_data(corpus, window_size, vocab_size, word_to_index,
-                                                              length_of_corpus)
-epoch_loss, weights_1, weights_2 = train(dimension, window_size, epochs, training_data, learning_rate)
+vocab_size=2000
+training_data = generate_training_data(word_to_index, index_to_word, vocab_size, data_text,
+                                       labels)
+
+train_d = np.asarray(training_data[0:int(0.8 * len(training_data))])
+test_d = np.asarray(training_data[int(0.8 * len(training_data)):-1])
+
+# Training and validation split. (%80-%20)
+valid_d = np.asarray(train_d[int(0.8 * len(train_d)):-1])
+train_d = np.asarray(train_d[0:int(0.8 * len(train_d))])
+
+epoch_loss, weights_1, weights_2 = train(dimension, window_size, epochs, train_d, learning_rate, valid_d,
+                                         disp='yes')
 
 a = 5
