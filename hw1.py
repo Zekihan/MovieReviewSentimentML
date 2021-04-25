@@ -5,19 +5,15 @@ import numpy as np
 from gensim.models import word2vec
 
 import torch
-from torchtext import data as tdata
+from torch.utils.data import TensorDataset, DataLoader, random_split
+from torch import nn
+from torchtext.data import get_tokenizer
+from collections import Counter
+from torchtext.vocab import Vocab
 
-SEED = 2019
-torch.manual_seed(SEED)
-torch.backends.cudnn.deterministic = True
-TEXT = tdata.Field(tokenize='spacy', batch_first=True, include_lengths=True)
-LABEL = tdata.LabelField(dtype=torch.float, batch_first=True)
-fields = [(None, None), ('text', TEXT), ('label', LABEL)]
-# loading custom dataset
-training_data = tdata.TabularDataset(path='quora.csv', format='csv', fields=fields, skip_header=True)
-
-# print preprocessed text
-print(vars(training_data.examples[0]))
+tokenizer = get_tokenizer('basic_english')
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+global text_pipeline
 
 stop_words = ["i", "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your", "yours", "yourself",
               "yourselves", "he", "him", "his", "himself", "she", "her", "hers", "herself", "it", "its", "itself",
@@ -165,7 +161,7 @@ def accuracy(true_labels, predictions):
     return true_pred / len(predictions)
 
 
-def get_file_data(path):
+def get_file_data(path, asArray=True):
     with open(path) as f:
         lines = f.readlines()
     text = []
@@ -175,12 +171,15 @@ def get_file_data(path):
         review = REPLACE_NO_SPACE.sub(" ", review.lower())
         review = REPLACE_STOP_WORDS.sub(" ", review.lower())
         review = ' '.join([w for w in review.split() if len(w) > 1])
-        text.append(review.split(' '))
+        if asArray:
+            text.append(review.split(' '))
+        else:
+            text.append(review)
     return text
 
 
 def word2vec_init():
-    data_text = get_file_data('./data/reviews.txt')
+    data_text = get_file_data(path + '/reviews.txt')
     data_text.append(['<padding>', '<unknown>'])
     model = word2vec.Word2Vec(data_text, vector_size=200, window=5, min_count=1, workers=4)
     model.train(data_text, total_examples=len(data_text), epochs=10)
@@ -226,8 +225,8 @@ def vectorisation_data(model, data_text):
 def part_a():
     model = word2vec_init()
 
-    data_text = get_file_data('./data/reviews.txt')
-    labels_text = get_file_data('./data/labels.txt')
+    data_text = get_file_data(path + '/reviews.txt')
+    labels_text = get_file_data(path + '/labels.txt')
     labels = generate_training_label(labels_text)
 
     train_x, train_y = np.asarray(data_text[0:int(0.1 * len(data_text))]), np.asarray(labels[0:int(0.1 * len(labels))])
@@ -253,11 +252,147 @@ def part_a():
     print(test(network, test_dataset))
 
 
+class TextClassificationModel(nn.Module):
+
+    def __init__(self, vocab_size, embed_dim, num_class):
+        super(TextClassificationModel, self).__init__()
+        self.embedding = nn.EmbeddingBag(vocab_size, embed_dim, sparse=True)
+        self.fc = nn.Linear(embed_dim, num_class)
+        self.init_weights()
+
+    def init_weights(self):
+        initrange = 0.5
+        self.embedding.weight.data.uniform_(-initrange, initrange)
+        self.fc.weight.data.uniform_(-initrange, initrange)
+        self.fc.bias.data.zero_()
+
+    def forward(self, text, offsets):
+        embedded = self.embedding(text, offsets)
+        return self.fc(embedded)
+
+
+def generate_training_data(text, text_pipeline):
+    vector_data = []
+    for line in text:
+        vector = []
+        for word in line.split(' ')[:200]:
+            try:
+                vector.append(text_pipeline(word)[0])
+            except:
+                vector.append(-1)
+        for i in range(len(vector), 200):
+            vector.append(-1)
+        vector_data.append(vector)
+    return vector_data
+
+
+def train_torch(model, dataloader, criterion, optimizer, epoch):
+    model.train()
+    total_acc, total_count = 0, 0
+    log_interval = 500
+
+    for idx, (label, text, offset) in enumerate(dataloader):
+        optimizer.zero_grad()
+        predited_label = model(text, offset)
+        loss = criterion(predited_label, label)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
+        optimizer.step()
+        total_acc += (predited_label.argmax(1) == label).sum().item()
+        total_count += label.size(0)
+        if idx % log_interval == 0 and idx > 0:
+            print('| epoch {:3d} | {:5d}/{:5d} batches '
+                  '| accuracy {:8.3f}'.format(epoch, idx, len(dataloader),
+                                              total_acc / total_count))
+            total_acc, total_count = 0, 0
+
+
+def evaluate(model, dataloader):
+    model.eval()
+    total_acc, total_count = 0, 0
+
+    with torch.no_grad():
+        for idx, (label, text, offsets) in enumerate(dataloader):
+            predited_label = model(text, offsets)
+            total_acc += (predited_label.argmax(1) == label).sum().item()
+            total_count += label.size(0)
+    return total_acc / total_count
+
+
 def part_b():
-    data_text = get_file_data('./data/reviews.txt')
-    labels_text = get_file_data('./data/labels.txt')
+    global text_pipeline
+    data_text = get_file_data(path + '/reviews.txt', asArray=False)
+    labels_text = get_file_data(path + '/labels.txt')
+    labels = np.asarray(generate_training_label(labels_text)).flatten()
+
+    counter = Counter()
+    for line in data_text:
+        counter.update(tokenizer(line))
+    vocab = Vocab(counter, min_freq=1)
+    text_pipeline = lambda x: [vocab[token] for token in tokenizer(x)]
+
+    data = generate_training_data(data_text, text_pipeline)
+
+    train_x, train_y = np.asarray(data[0:int(0.1 * len(data))]), np.asarray(labels[0:int(0.1 * len(labels))])
+    test_x, test_y = np.asarray(data[int(0.8 * len(data)):-1]), np.asarray(
+        labels[int(0.8 * len(labels)):-1])
+
+    # Training and validation split. (%80-%20)
+    valid_x = np.asarray(train_x[int(0.8 * len(train_x)):-1])
+    valid_y = np.asarray(train_y[int(0.8 * len(train_y)):-1])
+    train_x = np.asarray(train_x[0:int(0.8 * len(train_x))])
+    train_y = np.asarray(train_y[0:int(0.8 * len(train_y))])
+
+    BATCH_SIZE = 64  # batch size for training
+
+    tensor_train_x = torch.Tensor(train_x)  # transform to torch tensor
+    tensor_train_y = torch.Tensor(train_y)
+    tensor_train_offset = torch.Tensor(np.full((len(train_x), 1), 200).flatten())
+    my_train_dataset = TensorDataset(tensor_train_x, tensor_train_y, tensor_train_offset)  # create your datset
+    train_dataloader = DataLoader(my_train_dataset, batch_size=BATCH_SIZE,
+                                  shuffle=True)  # create your dataloader
+
+    tensor_valid_x = torch.Tensor(valid_x)  # transform to torch tensor
+    tensor_valid_y = torch.Tensor(valid_y)
+    tensor_valid_offset = torch.Tensor(np.full((len(valid_x), 1), 200).flatten())
+    my_valid_dataset = TensorDataset(tensor_valid_x, tensor_valid_y, tensor_valid_offset)  # create your datset
+    valid_dataloader = DataLoader(my_valid_dataset, batch_size=BATCH_SIZE,
+                                  shuffle=True)
+
+    tensor_test_x = torch.Tensor(test_x)  # transform to torch tensor
+    tensor_test_y = torch.Tensor(test_y)
+    tensor_valid_offset = torch.Tensor(np.full((len(test_x), 1), 200).flatten())
+    my_test_dataset = TensorDataset(tensor_test_x, tensor_test_y, tensor_valid_offset)  # create your datset
+    test_dataloader = DataLoader(my_test_dataset, batch_size=BATCH_SIZE,
+                                 shuffle=True)
+
+    num_class = 2
+    emsize = 64
+    EPOCHS = 10  # epoch
+    LR = 5  # learning rate
+    model = TextClassificationModel(len(vocab), emsize, num_class).to(device)
+
+    criterion = torch.nn.CrossEntropyLoss()
+    optimizer = torch.optim.SGD(model.parameters(), lr=LR)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.1)
+    total_accu = None
+
+    for epoch in range(1, EPOCHS + 1):
+        train_torch(model, train_dataloader, criterion, optimizer, epoch)
+        accu_val = evaluate(valid_dataloader)
+        if total_accu is not None and total_accu > accu_val:
+            scheduler.step()
+        else:
+            total_accu = accu_val
+        print('-' * 59)
+        print('| end of epoch {:3d}| '
+              'valid accuracy {:8.3f} '.format(epoch,
+                                               accu_val))
+        print('-' * 59)
 
 
 if __name__ == "__main__":
-    # part_a()
+    part_a()
+
+    # part b doesnt work
     part_b()
