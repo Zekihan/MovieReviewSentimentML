@@ -161,21 +161,6 @@ def accuracy(true_labels, predictions):
     return true_pred / len(predictions)
 
 
-def get_data_set(data_text):
-    model = word2vec.Word2Vec.load("word2vec.model")
-
-    data_text = np.asarray(data_text)
-    new_data = []
-    for text in data_text:
-        new_text = []
-        for word in text[:200]:
-            new_text.append(model.wv[word])
-        for _ in range(len(new_text), 200):
-            new_text.append(model.wv['<padding>'])
-        new_data.append(np.asarray(new_text).flatten())
-    return new_data
-
-
 def get_file_data(path):
     with open(path) as f:
         lines = f.readlines()
@@ -188,6 +173,16 @@ def get_file_data(path):
         review = ' '.join([w for w in review.split() if len(w) > 1])
         text.append(review.split(' '))
     return text
+
+
+def word2vec_init():
+    data_text = get_file_data('./data/reviews.txt')
+    data_text.append(['<padding>', '<unknown>'])
+    model = word2vec.Word2Vec(data_text, vector_size=200, window=5, min_count=1, workers=4)
+    model.save("word2vec.model")
+    model = word2vec.Word2Vec.load("word2vec.model")
+    model.train(data_text, total_examples=len(data_text), epochs=10)
+    return model
 
 
 def generate_training_label(labels_text):
@@ -210,14 +205,28 @@ def initialize_network(n_inputs, n_hidden, n_outputs):
     return network
 
 
+def vectorize_data(model, data_text):
+    data_text = np.asarray(data_text)
+    new_data = []
+    for text in data_text:
+        new_text = []
+        for word in text[:200]:
+            new_text.append(model.wv[word])
+        for _ in range(len(new_text), 200):
+            new_text.append(model.wv['<padding>'])
+        new_data.append(np.asarray(new_text).flatten())
+    return new_data
+
+
 if __name__ == "__main__":
+    model = word2vec_init()
+
     data_text = get_file_data('./data/reviews.txt')
-    data = get_data_set(data_text)
     labels_text = get_file_data('./data/labels.txt')
     labels = generate_training_label(labels_text)
 
-    train_x, train_y = np.asarray(data[0:int(0.1 * len(data))]), np.asarray(labels[0:int(0.1 * len(labels))])
-    test_x, test_y = np.asarray(data[int(0.8 * len(data)):-1]), np.asarray(labels[int(0.8 * len(labels)):-1])
+    train_x, train_y = np.asarray(data_text[0:int(0.1 * len(data_text))]), np.asarray(labels[0:int(0.1 * len(labels))])
+    test_x, test_y = np.asarray(data_text[int(0.8 * len(data_text)):-1]), np.asarray(labels[int(0.8 * len(labels)):-1])
 
     # Training and validation split. (%80-%20)
     valid_x = np.asarray(train_x[int(0.8 * len(train_x)):-1])
