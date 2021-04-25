@@ -37,13 +37,15 @@ def get_file_data(path):
 
 
 data_text = get_file_data('./data/reviews.txt')
-data_text.append(['<padding>'])
+data_text.append(['<padding>','<unknown>'])
 model = word2vec.Word2Vec(data_text, vector_size=200, window=5, min_count=1, workers=4)
 model.save("word2vec.model")
 model = word2vec.Word2Vec.load("word2vec.model")
 model.train(data_text, total_examples=len(data_text), epochs=10)
+model.save("word2vec.model")
+
 vectors = model.wv
-data_text.remove(['<padding>'])
+data_text.remove(['<padding>','<unknown>'])
 data_text = np.asarray(data_text)
 new_data = []
 for text in data_text:
@@ -54,14 +56,8 @@ for text in data_text:
         new_text.append(vectors['<padding>'])
     new_data.append(np.asarray(new_text).flatten())
 
+def get_vector(word):
+    print()
 
-def initialize_network(n_inputs, n_hidden, n_outputs):
-    network = list()
-    hidden_layer = [{'weights': [random() for i in range(n_inputs + 1)]} for i in range(n_hidden)]
-    network.append(hidden_layer)
-    output_layer = [{'weights': [random() for i in range(n_hidden + 1)]} for i in range(n_outputs)]
-    network.append(output_layer)
-    return network
-
-
+print(model.wv['high'])
 a = 5
